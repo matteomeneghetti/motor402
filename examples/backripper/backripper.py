@@ -171,7 +171,7 @@ if __name__ == "__main__":
     robot.init()
     # 10,-35,50
     # 50,-35,13
-    q = robot.ikine((0,20,-35), (radians(30), radians(0)))
+    q = robot.ikine((0,0,0), (radians(0), radians(0)))
     print(q)
     robot[4].move(-60/0.0127)
     while robot[4].is_moving():

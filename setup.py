@@ -1,5 +1,5 @@
 from setuptools import setup, find_packages
-from motor402 import __version__
+from version import __version__
 with open("README.md", "r") as fh:
     long_description = fh.read()
 
