@@ -20,6 +20,10 @@ class Homing:
     def get_velocity(self):
         return self._node.sdo[self.addresses.velocity_actual_value].raw
 
+    def set_homing_speeds(self, values):
+        self._node.sdo.download(self.addresses.homing_speeds, 1, uint32(int(values[0])))
+        self._node.sdo.download(self.addresses.homing_speeds, 2, uint32(int(values[1])))
+
     def get_home_offset(self):
         return self._node.sdo[self.addresses.home_offset].raw
 

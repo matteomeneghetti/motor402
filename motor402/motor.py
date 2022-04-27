@@ -1,5 +1,5 @@
 from canopen import RemoteNode
-from canopen.profiles.p402 import State402, OperationMode, Homing
+from canopen.profiles.p402 import State402, OperationMode
 from dataclasses import dataclass
 from .operating_modes import OperatingMode
 import time

@@ -124,7 +124,15 @@ class BackRipper:
                     motor.operation_mode = motor.operatingMode.profile_code
                 motor.switch_parameters = 3 # No limit switches
                 motor.maximum_current = 0.6 # 60% of 1.1A
-                self.motors[i].operatingMode.set_velocity(51200*5)
+                self.motors[i].operatingMode.set_velocity(int(51200))
+                min, max = self.limits[i]
+                if i in (2,3):
+                    min = min * 100 * 256
+                    max = max * 100 * 256
+                else:
+                    min = min / 0.0127 * 256 - 1
+                    max = max / 0.0127 * 256 + 1
+                self.motors[i].operatingMode.set_software_position_limit(int(min), int(max))
         self.node.nmt.state = 'OPERATIONAL'
 
     def ikine(self, position, orientation):
@@ -161,12 +169,16 @@ if __name__ == "__main__":
         print("Unable to connect to the board")
         exit(-1)
     robot.init()
-    q = robot.ikine((0,0,0), (radians(0), radians(0)))
+    # 10,-35,50
+    # 50,-35,13
+    q = robot.ikine((0,20,-35), (radians(30), radians(0)))
     print(q)
     robot[4].move(-60/0.0127)
     while robot[4].is_moving():
-        time.sleep(0.1)
+        time.sleep(0.2)
     robot.move(q)
     while robot[0].is_moving() or robot[1].is_moving() or robot[2].is_moving() or robot[3].is_moving():
-        time.sleep(0.1)
+        time.sleep(0.2)
     robot[4].move(q[4]/0.0127)
+    while robot[4].is_moving():
+        time.sleep(0.2)

@@ -1,4 +1,4 @@
-from .operating_mode import OperatingMode, OperatingModeCode
+from .operating_mode import OperatingMode
 
 from .position_profile import PositionProfile, PositionProfileAddresses
 from .velocity_profile import VelocityProfile, VelocityProfileAddresses
