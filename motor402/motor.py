@@ -1,134 +1,185 @@
-from canopen import RemoteNode
-from canopen.profiles.p402 import State402, OperationMode
-from dataclasses import dataclass
-from .operating_modes import OperatingMode
+from typing import Iterable
+import canopen
 import time
-from .utility import *
 
-@dataclass
-class Addresses:
-    controlword: int = 0x6040
-    statusword: int = 0x6041
-    operation_mode: int = 0x6060
+class PDOConfig:
+
+    def __init__(self, index, variables: Iterable = tuple(), **kwargs):
+        self.index = index
+        self.variables = variables
+        # for key, item in kwargs.items():
+        #     self.__dict__[key] = item
+        self.event_timer = kwargs.get('event_timer', 100)
+        self.rtr_allowed = kwargs.get('rtr_allowed', True)
+        self.trans_type = kwargs.get('trans_type', 10)
+        self.enabled = kwargs.get('enabled', True)
+
+default_addresses = {
+    'controlword': 0x6040,
+    'statusword': 0x6041,
+    'operating_mode': 0x6060
+}
+
+index_map = {
+    'pp': {
+        'value': 1,
+        'index_map': {
+            'position_demand_value': 0x6062,
+            'position_actual_internal_value': 0x6063,
+            'position_actual_value': 0x6064,
+            'following_error_window': 0x6065,
+            'position_window': 0x6067,
+            'position_window_time': 0x6068,
+            'velocity_actual_value': 0x606C,
+            'target_position': 0x607A,
+            'software_position_limit': 0x607D,
+            'profile_velocity': 0x6081,
+            'end_velocity': 0x6082,
+            'profile_acceleration': 0x6083,
+            'profile_deceleration': 0x6084,
+            'quick_stop_deceleration': 0x6085,
+            'positioning_option_code': 0x60F2,
+        }
+    },
+    'common': {
+        'controlword': 0x6040,
+        'statusword': 0x6041,
+        'operating_mode': 0x6060
+    }
+}
+
+
+
 
 class Motor:
 
-    def __init__(self, board: RemoteNode):
-        self._node = board
-        self.addresses = Addresses()
-        self.operatingMode = None
+    class _Variable:
 
-    def attach(self, operatingMode: OperatingMode):
-        """Attach an Operating Mode to the motor
+        def __init__(self, name: str, index: int, subindex: int = 0):
+            self.name = name
+            self.index = index
+            self.subindex = subindex
+            self.update_through_pdo = False
+            self.value = None # type Variable
 
-        Args:
-            operatingMode (OperatingMode): operating mode
-        """
-        self.operatingMode = operatingMode
-        #self.operation_mode = self.operatingMode.profile_code
+        def __eq__(self, value):
+            if isinstance(value, Motor._Variable):
+                return self.name == value.name
+            elif isinstance(value, str):
+                return self.name == value
+            elif isinstance(value, int):
+                return self.index == value
+            elif isinstance(value, Iterable) and len(value) >= 2:
+                return (self.index, self.subindex) == value[:2]
+            else:
+                raise TypeError("cannot compare " + type(self) + " with " + type(value))
 
-    @property
-    def statusword(self):
-        """Return the raw statusword
-        """
-        return self._node.sdo[self.addresses.statusword].raw
+    class _OperatingMode:
 
-    @property
-    def controlword(self):
-        raise NotImplementedError("Can't read Controlword")
+        def __init__(self, value: int, index_map: dict):
+            self.value = 0
+            self.variables = []
+            for key, item in index_map.items():
+                if isinstance(item, Iterable) and len(item) > 1:
+                    var = Motor._Variable(key, item[0], item[1])
+                else:
+                    var = Motor._Variable(key, item)
+                self.variables.append(var)
 
-    @controlword.setter
-    def controlword(self, value):
-        """_summary_
 
-        Args:
-            value (_type_): _description_
-        """
-        self._node.sdo[self.addresses.controlword].raw = uint16(value)
+    def __init__(self, node: canopen.RemoteNode, tpdos: Iterable = (), index_map: dict = index_map):
 
-    @property
-    def state(self)-> str:
-        """
-        Returns:
-            str: current 402 state as a string
-        """
-        for state, mask_val_pair in State402.SW_MASK.items():
-            bitmask, bits = mask_val_pair
-            if self.statusword & bitmask == bits:
-                return state
-        return 'UNKNOWN'
+        self._node = node
+        self._operating_mode = None
 
-    @state.setter
-    def state(self, desired_state):
-        while self.state != desired_state:
-            next_state = self._next_state(desired_state)
-            if self._change_state(next_state):
+        self.operating_modes = dict()
+        for key, item in index_map.items():
+            if key == 'common':
                 continue
-            if time.monotonic() > 0.5:
-                raise RuntimeError('Timeout when trying to change state')
-            self.check_statusword()
+            self.operating_modes[key] = Motor._OperatingMode(item['value'], item['index_map'])
 
-    def _next_state(self, target_state):
-        if target_state in ('NOT READY TO SWITCH ON',
-                            'FAULT REACTION ACTIVE',
-                            'FAULT'):
-            raise ValueError(
-                'Target state {} cannot be entered programmatically'.format(target_state))
-        from_state = self.state
-        if (from_state, target_state) in State402.TRANSITIONTABLE:
-            return target_state
+        self.common_variables = []
+        for key, item in index_map['common'].items():
+            if isinstance(item, Iterable) and len(item) > 1:
+                var = Motor._Variable(key, item[0], item[1])
+            else:
+                var = Motor._Variable(key, item)
+            self.common_variables.append(var)
+
+        self._init_tpdos(tpdos)
+
+    def _init_tpdos(self, configs: Iterable[PDOConfig]):
+
+        for pdo_config in configs:
+            if type(pdo_config) != PDOConfig:
+                raise TypeError
+            self._node.tpdo[pdo_config.index].clear()
+
+            for variable_name in pdo_config.variables:
+                if variable_name in self.common_variables:
+                    variable = self.common_variables[self.common_variables.index(variable_name)]
+                elif variable_name in self.operating_modes[self._operating_mode].variables:
+                    var_list = self.operating_modes[self._operating_mode].variables
+                    variable = var_list[var_list.index(variable_name)]
+                else:
+                    raise IndexError
+
+                self._node.tpdo[pdo_config.index].add_variable(variable.index, variable.subindex)
+                variable.update_through_pdo = True
+
+            #self._node.tpdo[pdo_config.index].event_timer = pdo_config.event_timer
+            self._node.tpdo[pdo_config.index].trans_type = pdo_config.trans_type
+            self._node.tpdo[pdo_config.index].rtr_allowed = pdo_config.rtr_allowed
+            self._node.tpdo[pdo_config.index].enabled = pdo_config.enabled
+            self._node.tpdo[pdo_config.index].save()
+
+            self._node.tpdo[pdo_config.index].add_callback(self.pdo_callback)
+
+    def set_operating_mode(self, mode: str):
+
+        if mode in self.operating_modes:
+            self._operating_mode = mode
         else:
-            return State402.next_state_for_enabling(from_state)
+            raise ValueError
 
-    def _change_state(self, target_state):
-        try:
-            self.controlword = State402.TRANSITIONTABLE[(self.state, target_state)]
-        except KeyError:
-            raise ValueError(
-                'Illegal state transition from {f} to {t}'.format(f=self.state, t=target_state))
-        timeout = time.monotonic() + 0.5
-        while self.state != target_state:
-            if time.monotonic() > timeout:
-                return False
-        return True
 
-    @property
-    def is_power_enabled(self):
-        return self.statusword & 0x02
+    def pdo_callback(self, msg):
+        # op_mode_var_list = self.operating_modes[self._operating_mode].variables
+        # for var in msg:
+        #     variable = None
+        #     print(var)
+        #     if var.index in self.common_variables:
+        #         print(self.common_variables.index(var.index))
+        #         variable = self.common_variables[self.common_variables.index(var.index)]
+        #         variable.value = var.copy()
+        #     elif var.index in op_mode_var_list:
+        #         print(self.common_variables.index(var.index))
+        #         variable = op_mode_var_list[op_mode_var_list.index(var.index)]
+        #         variable.value = var.copy()
+        #     else:
+        #         print("ciao")
 
-    @property
-    def is_torque_enabled(self):
-        return self.statusword & 0x04
+        # op_mode_var_list = self.operating_modes[self._operating_mode].variables
+        print(self._operating_mode)
+        for var in msg:
+            if var.index in self.common_variables:
+                variable = self.common_variables[self.common_variables.index(var.index)]
+                variable.value = var
+                print(variable)
 
-    @property
-    def is_faulted(self):
-        bitmask, bits = State402.SW_MASK['FAULT']
-        return self.statusword & bitmask == bits
+if __name__ == "__main__":
+    network = canopen.Network()
+    node = canopen.RemoteNode(0x75, '../examples/backripper/TMCM-6212.eds')
+    network.add_node(node)
+    network.connect(bustype='pcan', channel='PCAN_USBBUS1', bitrate=1000000)
+    time.sleep(0.1)
 
-    @property
-    def operation_mode(self):
-        return self._node.sdo[self.addresses.operation_mode].raw #OperationMode.CODE2NAME[self._node.sdo[self.addresses.operation_mode].raw]
-
-    @operation_mode.setter
-    def operation_mode(self, desired_mode):
-        self._recover_from_fault()
-        if self.is_power_enabled:
-            raise ValueError("Can't change operation mode: power is enabled")
-        if type(desired_mode) == int:
-            self._node.sdo[self.addresses.operation_mode].raw = uint8(desired_mode)
-        else:
-            self._node.sdo[self.addresses.operation_mode].raw = uint8(OperationMode.NAME2CODE[desired_mode])
-
-    def _recover_from_fault(self):
-        #if self.is_faulted:
-        self.state = 'SWITCH ON DISABLED'
-        while self.is_faulted:
-            time.sleep(0.01)
-
-    def _move(self, value):
-        self.state = 'OPERATION ENABLED'
-        self.operatingMode.set_command(value)
-        self.controlword = 31 # Target is active
-
-    def move(self, value):
-        self._move(value)
+    node.nmt.state = 'PRE-OPERATIONAL'
+    node.tpdo.read()
+    config = PDOConfig(1, ('statusword','operating_mode', 'statusword'), rtr_allowed=False)
+    config3 = PDOConfig(3, tuple(), enabled=False)
+    motor = Motor(node, [config, config3])
+    node.nmt.state = 'OPERATIONAL'
+    network.sync.start(0.1)
+    while True:
+        time.sleep(0.2)

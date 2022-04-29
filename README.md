@@ -41,3 +41,7 @@ Although CiA402 is a well-specified set of motion control profiles, the manufact
 
 <a id="3">[3]</a>  [CiA® 402 series: CANopen device profile for drives and motion control](https://www.can-cia.org/can-knowledge/canopen/cia402)
 
+## Authors
+
+- Matteo Meneghetti
+- Noè Murr

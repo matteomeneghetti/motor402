@@ -9,11 +9,11 @@ setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     packages=find_packages(),
-    install_requires=["canopen"],
+    install_requires=["canopen>=2.0.0"],
     python_requires='>=3.6',
     url="",
     license="MIT",
-    author="Matteo Meneghetti",
+    author="Matteo Meneghetti && Noè Murr",
     author_email="matteo@meneghetti.dev",
     classifiers=[
         'Development Status :: 3 - Alpha',
