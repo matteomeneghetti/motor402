@@ -1,10 +1,11 @@
 from typing import Iterable, Tuple, Union
 import canopen
 import time
-
 from threading import Thread
+
 from configs import TPDOConfig, RPDOConfig
 from utility import *
+from state import SW_MASK, TRANSITIONTABLE, to_operation_enabled_map
 
 index_map = {
     "no_mode": {
@@ -195,9 +196,49 @@ class Motor:
             var = var[subindex]
         return setattr(var, property, value)
 
+    @property
+    def state(self):
+        for state, mask_val_pair in SW_MASK.items():
+            bitmask, bits = mask_val_pair
+            if self.get('statusword') & bitmask == bits:
+                return state
+        return 'UNKNOWN'
 
-    def set_operating_mode(self, mode: str):
+    @state.setter
+    def state(self, new_state:str):
 
+        if self.state == new_state:
+            return
+
+        if new_state not in SW_MASK:
+            raise ValueError
+
+        transition = (self.state, new_state)
+        if transition not in TRANSITIONTABLE:
+            raise ValueError
+
+        self.set('controlword', uint16(TRANSITIONTABLE[transition]))
+
+        self.state
+
+    @property
+    def is_faulted(self):
+        return self.state == 'FAULT'
+
+    def recover_from_fault(self):
+        self.state = 'SWITCH ON DISABLED'
+
+    def to_operational(self):
+        transitions = to_operation_enabled_map[self.state]
+        for state in transitions:
+            self.state = state
+
+    @property
+    def operating_mode(self):
+        return self.get(self._look_up(self.operating_mode_map['index']))
+
+    @operating_mode.setter
+    def operating_mode(self, mode):
         if mode in self.operating_mode_map['profiles']:
             value = self._operating_mode = self.operating_mode_map['profiles'][mode]
             op_mode_index, op_mode_subindex = self._look_up(self.operating_mode_map['index'])
@@ -224,7 +265,7 @@ if __name__ == "__main__":
 
     tpdos = [
         TPDOConfig(
-            1, ("operating_mode",), rtr_allowed=False, enabled=True
+            1, ("operating_mode",), rtr_allowed=False, enabled=False
         ),
         TPDOConfig(3, ("target_position",), rtr_allowed=False, enabled=False),
     ]
@@ -240,13 +281,18 @@ if __name__ == "__main__":
     ]
 
     motor = Motor(node)
-    motor.set_operating_mode('pp')
-    motor.set_tpdos(tpdos)
-    motor.set_rpdos(rpdos)
     node.nmt.state = "OPERATIONAL"
-    network.sync.start(0.1)
-    motor.start_rpdo(1)
+    motor.operating_mode = 'pp'
+    motor.set(0x2005, uint32(3))
+    print(motor.state)
+    motor.to_operational()
+    motor.set(0x607A, int32(int(50/0.0127*256)))
+    motor.set('controlword', uint16(31))
+    print(motor.state)
+    # motor.set_tpdos(tpdos)
+    # motor.set_rpdos(rpdos)
+    # network.sync.start(0.1)
+    # motor.start_rpdo(1)
 
     while True:
-        print(motor.get("operating_mode"))
         time.sleep(1)
