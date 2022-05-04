@@ -41,8 +41,12 @@ rename_map = {
     "target_position": "Target Position 1"
 }
 
-operating_modes_cfg = {
-    "label": "operating_modes"
+motion_profiles_cfg = {
+    "index": "operating_mode",
+    "profiles": {
+        "no_mode": 0,
+        "pp": 1
+    }
 }
 
 
@@ -81,15 +85,17 @@ class Motor:
         self,
         node: canopen.RemoteNode,
         rename_map: dict = rename_map,
+        motion_profiles: dict = motion_profiles_cfg
     ):
 
         self._node = node
-        self._operating_mode = "no_mode"
         self.rpdo_tasks = {}
         self.tpdo = {}
         self.tpdo_values = {}
 
         self.rename_map = rename_map
+        self.operating_mode_map = motion_profiles
+        self._operating_mode = 0
 
     def set_tpdos(self, configs: Iterable[TPDOConfig]):
 
@@ -149,7 +155,7 @@ class Motor:
                 pdo_config.frequency,
             )
 
-    def _look_up(self, index, subindex):
+    def _look_up(self, index, subindex=0):
         index = self.rename_map.get(index, False) or index
         subindex = self.rename_map.get(subindex, False) or subindex
         var = self._node.object_dictionary.get_variable(index, subindex)
@@ -175,7 +181,7 @@ class Motor:
 
         # Look up if the requested variable is currently being updated through PDOs
         if (index, subindex) in self.tpdo_values:
-            return self.tpdo_values[(index, subindex)]
+            return getattr(self.tpdo_values[(index, subindex)], property)
 
         var = self._node.sdo[index]
         if not isinstance(var, canopen.sdo.Variable):
@@ -192,12 +198,11 @@ class Motor:
 
     def set_operating_mode(self, mode: str):
 
-        if mode in self.operating_modes:
-            self._operating_mode = mode
-            value = self.operating_modes[mode].value
-            if value == self.get('operating_mode').raw:
-                return
-            self.set('operating_mode', value)
+        if mode in self.operating_mode_map['profiles']:
+            value = self._operating_mode = self.operating_mode_map['profiles'][mode]
+            op_mode_index, op_mode_subindex = self._look_up(self.operating_mode_map['index'])
+            if value != self.get(op_mode_index, op_mode_subindex):
+                self.set(op_mode_index, value, subindex=op_mode_subindex)
         else:
             raise ValueError
 
@@ -219,7 +224,7 @@ if __name__ == "__main__":
 
     tpdos = [
         TPDOConfig(
-            1, ("statusword",), rtr_allowed=False, enabled=True
+            1, ("operating_mode",), rtr_allowed=False, enabled=True
         ),
         TPDOConfig(3, ("target_position",), rtr_allowed=False, enabled=False),
     ]
@@ -235,6 +240,7 @@ if __name__ == "__main__":
     ]
 
     motor = Motor(node)
+    motor.set_operating_mode('pp')
     motor.set_tpdos(tpdos)
     motor.set_rpdos(rpdos)
     node.nmt.state = "OPERATIONAL"
@@ -242,5 +248,5 @@ if __name__ == "__main__":
     motor.start_rpdo(1)
 
     while True:
-        print(motor.get("target_position"))
+        print(motor.get("operating_mode"))
         time.sleep(1)
