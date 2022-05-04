@@ -34,49 +34,19 @@ index_map = {
     "common": {"controlword": 0x6040, "statusword": 0x6041, "operating_mode": 0x6060, "switch": 0x2005},
 }
 
+rename_map = {
+    "controlword": "Controlword 1",
+    "statusword": "Statusword 1",
+    "operating_mode": "Modes of Operation 1",
+    "target_position": "Target Position 1"
+}
 
-def _init_indexmap(indexmap) -> dict:
-    cache = dict()
-    for name, index in indexmap.items():
-        if isinstance(index, Iterable):
-            var = Motor._Variable(name, index[0], index[1] if len(index) > 1 else None)
-            cache[name] = var
-            cache[(index[0], index[1] if len(index) > 1 else None)] = var  #!non c'era alternativa
-        elif isinstance(index, int):
-            var = Motor._Variable(name, index)
-            cache[name] = var
-            cache[(index, None)] = var
-        else:
-            raise TypeError("Index should be a tuple(int[,int]) or an int")
-    return cache
+operating_modes_cfg = {
+    "label": "operating_modes"
+}
 
 
 class Motor:
-    class _Variable:
-        def __init__(self, name, index, subindex=None):
-            self.name = name
-            self.index = index
-            self.subindex = subindex
-            self.update_through_pdo = False
-            self.value = None  # type pdo.base.Variable
-
-        def __eq__(self, value):
-            if isinstance(value, Motor._Variable):
-                return self.name == value.name
-            elif isinstance(value, str):
-                return self.name == value
-            elif isinstance(value, int):
-                return self.index == value
-            elif isinstance(value, Iterable) and len(value) >= 2:
-                return (self.index, self.subindex) == value[:2]
-            else:
-                raise TypeError("cannot compare " + type(self) + " with " + type(value))
-
-    class _OperatingMode:
-        def __init__(self, value: int, index_map: dict):
-            self.value = value
-            self.variables = _init_indexmap(index_map)
-
     class _Task:
         def __init__(self, pdo, indexes, data_generator, frequency):
             self.pdo = pdo
@@ -92,9 +62,10 @@ class Motor:
                 if not self.running:
                     break
                 for (index, subindex), d in zip(self.indexes, data):
-                    self.pdo[
-                        index
-                    ].raw = d  # TODO need to access also through subindex WTF
+                    var = self.pdo[index]
+                    if not isinstance(var, canopen.pdo.Variable):
+                        var = var[subindex]
+                    var.raw = d
                 self.pdo.transmit()
                 time.sleep(1 / self.frequency)
 
@@ -109,23 +80,16 @@ class Motor:
     def __init__(
         self,
         node: canopen.RemoteNode,
-        index_map: dict = index_map,
+        rename_map: dict = rename_map,
     ):
 
         self._node = node
         self._operating_mode = "no_mode"
         self.rpdo_tasks = {}
         self.tpdo = {}
+        self.tpdo_values = {}
 
-        self.operating_modes = dict()
-        for key, item in index_map.items():
-            if key == "common":
-                continue
-            self.operating_modes[key] = Motor._OperatingMode(
-                item["value"], item["index_map"]
-            )
-
-        self.common_variables = _init_indexmap(index_map["common"])
+        self.rename_map = rename_map
 
     def set_tpdos(self, configs: Iterable[TPDOConfig]):
 
@@ -134,19 +98,16 @@ class Motor:
                 raise TypeError
             self._node.tpdo[pdo_config.index].clear()
 
-            for variable_key in pdo_config.variables:
+            for index in pdo_config.variables:
 
-                if isinstance(variable_key, int):
-                    variable_key = (variable_key, 0)
+                subindex = 0
+                if isinstance(index, Iterable) and not isinstance(index, str):
+                    index, subindex = index
+                index, subindex = self._look_up(index, subindex)
 
-                variable = self._get_variable(variable_key)
-                if variable is None:
-                    raise IndexError
-
-                self._node.tpdo[pdo_config.index].add_variable(
-                    variable.index, variable.subindex
-                )
-                variable.update_through_pdo = pdo_config.enabled
+                var =  self._node.tpdo[pdo_config.index].add_variable(index, subindex)
+                if pdo_config.enabled:
+                    self.tpdo_values[(index, subindex)] = var
 
             # self._node.tpdo[pdo_config.index].event_timer = pdo_config.event_timer
             self._node.tpdo[pdo_config.index].trans_type = pdo_config.trans_type
@@ -166,15 +127,15 @@ class Motor:
 
             variables_list = []
 
-            for variable_key in pdo_config.variables:
+            for index in pdo_config.variables:
 
-                variable = self._get_variable(variable_key)
-                if variable is None:
-                    raise IndexError
-                self._node.rpdo[pdo_config.index].add_variable(
-                    variable.index, variable.subindex
-                )
-                variables_list.append((variable.index, variable.subindex))
+                subindex = 0
+                if isinstance(index, Iterable) and not isinstance(index, str):
+                    index, subindex = index
+                index, subindex = self._look_up(index, subindex)
+
+                self._node.rpdo[pdo_config.index].add_variable(index, subindex)
+                variables_list.append((index, subindex))
 
             self._node.rpdo[pdo_config.index].rtr_allowed = pdo_config.rtr_allowed
             self._node.rpdo[pdo_config.index].trans_type = pdo_config.trans_type
@@ -187,6 +148,12 @@ class Motor:
                 pdo_config.data,
                 pdo_config.frequency,
             )
+
+    def _look_up(self, index, subindex):
+        index = self.rename_map.get(index, False) or index
+        subindex = self.rename_map.get(subindex, False) or subindex
+        var = self._node.object_dictionary.get_variable(index, subindex)
+        return (var.index, var.subindex)
 
     def clear_tpdo(self, index: int):
         self.tpdo[index].clear()
@@ -202,36 +169,26 @@ class Motor:
     def start_rpdo(self, index):
         self.rpdo_tasks[index].start()
 
-    def get(self, variable_key: Union[str, int, Tuple[int, int]]):
-        variable = self._get_variable(variable_key)
-        if variable is not None:
-            if variable.update_through_pdo:
-                return variable.value
-            else:
-                if variable.subindex is None:
-                    return self._node.sdo[variable.index]
-                else:
-                    return self._node.sdo[variable.index][variable.subindex]
-        raise IndexError
 
-    def set(self, variable_key: Union[str, int, Tuple[int, int]], value, property:str='raw'):
-        variable = self._get_variable(variable_key)
-        if variable is None:
-            raise IndexError
+    def get(self, variable_index, variable_subindex=0, property:str='raw'):
+        index, subindex = self._look_up(variable_index, variable_subindex)
 
-        if variable.subindex is None:
-            setattr(self._node.sdo[variable.index], property, value)
-        else:
-            setattr(self._node.sdo[variable.index][variable.subindex], property, value)
-            #self._node.sdo[variable.index][variable.subindex].__dict__[property] = value
+        # Look up if the requested variable is currently being updated through PDOs
+        if (index, subindex) in self.tpdo_values:
+            return self.tpdo_values[(index, subindex)]
 
-    def _get_variable(self, variable_key: Union[str, int, Tuple[int, int]]):
-        if isinstance(variable_key, int):
-            variable_key = (variable_key, None)
-        variable = self.common_variables.get(variable_key, None)
-        if variable is None:
-            variable = self.operating_modes[self._operating_mode].variables.get(variable_key, None)
-        return variable
+        var = self._node.sdo[index]
+        if not isinstance(var, canopen.sdo.Variable):
+            var = var[subindex]
+        return getattr(var, property)
+
+    def set(self, variable_index, value, property:str='raw', *, subindex=None):
+        index, subindex = self._look_up(variable_index, subindex)
+        var = self._node.sdo[index]
+        if not isinstance(var, canopen.sdo.Variable):
+            var = var[subindex]
+        return setattr(var, property, value)
+
 
     def set_operating_mode(self, mode: str):
 
@@ -246,16 +203,7 @@ class Motor:
 
     def pdo_callback(self, msg):
         for var in msg:
-            if (var.index, var.subindex) in self.common_variables:
-                self.common_variables[(var.index, var.subindex)].value = var
-            elif (var.index, None) in self.common_variables:
-                self.common_variables[(var.index, None)].value = var
-            elif (var.index, var.subindex) in self.operating_modes[self._operating_mode].variables:
-                self.operating_modes[self._operating_mode].variables[(var.index, var.subindex)].value = var
-            elif (var.index, None) in self.operating_modes[self._operating_mode].variables:
-                self.operating_modes[self._operating_mode].variables[(var.index, None)].value = var
-            else:
-                raise ValueError("Hello mona")
+            self.tpdo_values[(var.index, var.subindex)] = var
 
 
 if __name__ == "__main__":
@@ -287,24 +235,12 @@ if __name__ == "__main__":
     ]
 
     motor = Motor(node)
-    # motor.set_tpdos(tpdos)
-    # motor.set_rpdos(rpdos)
+    motor.set_tpdos(tpdos)
+    motor.set_rpdos(rpdos)
     node.nmt.state = "OPERATIONAL"
-    network.sync.start(0.01)
-    time.sleep(1)
-    print("Operating mode: ", motor.get("operating_mode").raw)
-    print(bin(motor.get("statusword").raw))
-
-    motor.set("controlword", uint16(128))
-    motor.set(0x2005, uint32(3))
-    motor.set_operating_mode("pp")
-
-    motor.set("controlword", uint16(6))
-    motor.set("controlword", uint16(7))
-    motor.set("controlword", uint16(15))
-    motor.set("target_position", int32(int(-100/0.0127*256)))
-    motor.set("controlword", uint16(31))
+    network.sync.start(0.1)
+    motor.start_rpdo(1)
 
     while True:
-        print(motor.get("position_actual_internal_value").raw)
+        print(motor.get("target_position"))
         time.sleep(1)
