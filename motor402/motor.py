@@ -4,6 +4,7 @@ import time
 
 from threading import Thread
 from configs import TPDOConfig, RPDOConfig
+from utility import *
 
 index_map = {
     "no_mode": {
@@ -30,7 +31,7 @@ index_map = {
             "positioning_option_code": 0x60F2,
         },
     },
-    "common": {"controlword": 0x6040, "statusword": 0x6041, "operating_mode": 0x6060},
+    "common": {"controlword": 0x6040, "statusword": 0x6041, "operating_mode": 0x6060, "switch": 0x2005},
 }
 
 
@@ -286,11 +287,24 @@ if __name__ == "__main__":
     ]
 
     motor = Motor(node)
-    motor.set_operating_mode("pp")
-    motor.set_tpdos(tpdos)
-    motor.set_rpdos(rpdos)
+    # motor.set_tpdos(tpdos)
+    # motor.set_rpdos(rpdos)
     node.nmt.state = "OPERATIONAL"
     network.sync.start(0.01)
+    time.sleep(1)
+    print("Operating mode: ", motor.get("operating_mode").raw)
+    print(bin(motor.get("statusword").raw))
+
+    motor.set("controlword", uint16(128))
+    motor.set(0x2005, uint32(3))
+    motor.set_operating_mode("pp")
+
+    motor.set("controlword", uint16(6))
+    motor.set("controlword", uint16(7))
+    motor.set("controlword", uint16(15))
+    motor.set("target_position", int32(int(-100/0.0127*256)))
+    motor.set("controlword", uint16(31))
+
     while True:
-        print(motor.get("operating_mode").raw)
+        print(motor.get("position_actual_internal_value").raw)
         time.sleep(1)
