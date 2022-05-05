@@ -1,3 +1,4 @@
+from math import pi, sin
 from typing import Iterable, Tuple, Union
 import canopen
 import time
@@ -5,48 +6,64 @@ from threading import Thread
 
 from configs import TPDOConfig, RPDOConfig
 from utility import *
-from state import SW_MASK, TRANSITIONTABLE, to_operation_enabled_map
+from state import SW_MASK, TRANSITIONTABLE, to_operation_enabled_map, to_switch_on_disabled
 
-index_map = {
-    "no_mode": {
-        "value": 0,
-        "index_map": {}
-    },
-    "pp": {
-        "value": 1,
-        "index_map": {
-            "position_demand_value": 0x6062,
-            "position_actual_internal_value": 0x6063,
-            "position_actual_value": 0x6064,
-            "following_error_window": 0x6065,
-            "position_window": 0x6067,
-            "position_window_time": 0x6068,
-            "velocity_actual_value": 0x606C,
-            "target_position": 0x607A,
-            "software_position_limit": 0x607D,
-            "profile_velocity": 0x6081,
-            "end_velocity": 0x6082,
-            "profile_acceleration": 0x6083,
-            "profile_deceleration": 0x6084,
-            "quick_stop_deceleration": 0x6085,
-            "positioning_option_code": 0x60F2,
-        },
-    },
-    "common": {"controlword": 0x6040, "statusword": 0x6041, "operating_mode": 0x6060, "switch": 0x2005},
-}
 
 rename_map = {
     "controlword": "Controlword 1",
     "statusword": "Statusword 1",
     "operating_mode": "Modes of Operation 1",
-    "target_position": "Target Position 1"
+    "target_position": "Target Position 1",
+    "target_velocity": "Target Velocity 1",
+    "position_actual_value": "Position Actual Value 1",
+    "velocity_actual_value": "Velocity Actual Value 1",
+    "switches": "Switch Parameters 1",
+    "microstep_resolution": "Microstep Resolution 1"
+}
+
+rename_map2 = {
+    "controlword": "Controlword 2",
+    "statusword": "Statusword 2",
+    "operating_mode": "Modes of Operation 2",
+    "target_position": "Target Position 2",
+    "target_velocity": "Target Velocity 2",
+    "position_actual_value": "Position Actual Value 2",
+    "velocity_actual_value": "Velocity Actual Value 2",
+    "switches": "Switch Parameters 2",
+    "microstep_resolution": "Microstep Resolution 2"
+}
+
+rename_map3 = {
+    "controlword": "Controlword 3",
+    "statusword": "Statusword 3",
+    "operating_mode": "Modes of Operation 3",
+    "target_position": "Target Position 3",
+    "target_velocity": "Target Velocity 3",
+    "position_actual_value": "Position Actual Value 3",
+    "velocity_actual_value": "Velocity Actual Value 3",
+    "switches": "Switch Parameters 3",
+    "microstep_resolution": "Microstep Resolution 3"
+}
+
+rename_map4 = {
+    "controlword": "Controlword 4",
+    "statusword": "Statusword 4",
+    "operating_mode": "Modes of Operation 4",
+    "target_position": "Target Position 4",
+    "target_velocity": "Target Velocity 4",
+    "position_actual_value": "Position Actual Value 4",
+    "velocity_actual_value": "Velocity Actual Value 4",
+    "switches": "Switch Parameters 4",
+    "microstep_resolution": "Microstep Resolution 4"
 }
 
 motion_profiles_cfg = {
     "index": "operating_mode",
     "profiles": {
         "no_mode": 0,
-        "pp": 1
+        "pp": 1,
+        "csp": 8,
+        "csv": 9
     }
 }
 
@@ -86,7 +103,10 @@ class Motor:
         self,
         node: canopen.RemoteNode,
         rename_map: dict = rename_map,
-        motion_profiles: dict = motion_profiles_cfg
+        motion_profiles: dict = motion_profiles_cfg,
+        *,
+        controlword_index='controlword',
+        statusword_index='statusword'
     ):
 
         self._node = node
@@ -97,6 +117,8 @@ class Motor:
         self.rename_map = rename_map
         self.operating_mode_map = motion_profiles
         self._operating_mode = 0
+        self._cw_index = controlword_index
+        self._sw_index = statusword_index
 
     def set_tpdos(self, configs: Iterable[TPDOConfig]):
 
@@ -200,7 +222,7 @@ class Motor:
     def state(self):
         for state, mask_val_pair in SW_MASK.items():
             bitmask, bits = mask_val_pair
-            if self.get('statusword') & bitmask == bits:
+            if self.get(self._sw_index) & bitmask == bits:
                 return state
         return 'UNKNOWN'
 
@@ -217,9 +239,8 @@ class Motor:
         if transition not in TRANSITIONTABLE:
             raise ValueError
 
-        self.set('controlword', uint16(TRANSITIONTABLE[transition]))
+        self.set(self._cw_index, uint16(TRANSITIONTABLE[transition]))
 
-        self.state
 
     @property
     def is_faulted(self):
@@ -233,6 +254,11 @@ class Motor:
         for state in transitions:
             self.state = state
 
+    def to_switch_on_disabled(self):
+        transitions = to_switch_on_disabled[self.state]
+        for state in transitions:
+            self.state = state
+
     @property
     def operating_mode(self):
         return self.get(self._look_up(self.operating_mode_map['index']))
@@ -243,6 +269,7 @@ class Motor:
             value = self._operating_mode = self.operating_mode_map['profiles'][mode]
             op_mode_index, op_mode_subindex = self._look_up(self.operating_mode_map['index'])
             if value != self.get(op_mode_index, op_mode_subindex):
+                self.to_switch_on_disabled()
                 self.set(op_mode_index, value, subindex=op_mode_subindex)
         else:
             raise ValueError
@@ -264,35 +291,69 @@ if __name__ == "__main__":
     node.rpdo.read()
 
     tpdos = [
-        TPDOConfig(
-            1, ("operating_mode",), rtr_allowed=False, enabled=False
-        ),
-        TPDOConfig(3, ("target_position",), rtr_allowed=False, enabled=False),
+        [
+        TPDOConfig(1, ("position_actual_value",), rtr_allowed=False, enabled=True),
+        ],
+        [
+        TPDOConfig(2, ("position_actual_value",), rtr_allowed=False, enabled=True),
+        ]
     ]
 
-    def generator():
-        for i in range(1000000):
-            yield (i,)
+    def generator_pos():
+        start = time.time()
+        while True:
+            actual_time = time.time() - start
+            value = 20*sin(2*pi*0.1*actual_time)
+            value = value/0.0127*256
+            yield(int(value),)
+
+    def generator_vel():
+        start = time.time()
+        while True:
+            actual_time = time.time() - start
+            value = 10*sin(2*pi*0.1*actual_time)
+            value = value*200*256
+            yield(int(value),)
 
     rpdos = [
-        RPDOConfig(
-            1, ("target_position",), data=generator, frequency=100, rtr_allowed=False
-        )
+        [
+            RPDOConfig(1, ("target_position",), data=generator_pos, frequency=1000, rtr_allowed=False)
+        ],
+        [
+            RPDOConfig(2, ("target_position",), data=generator_vel, frequency=1000, rtr_allowed=False)
+        ]
     ]
 
-    motor = Motor(node)
+    # motor1 = Motor(node)
+    # motor2 = Motor(node, rename_map=rename_map3)
+    # motors = [motor1, motor2]
+    # for index,motor in enumerate(motors):
+    #     motor.set_tpdos(tpdos[index])
+    #     motor.set_rpdos(rpdos[index])
+    # node.nmt.state = "OPERATIONAL"
+    # for motor in motors:
+    #     if motor.is_faulted:
+    #         motor.recover_from_fault()
+    #     motor.operating_mode = 'csp'
+    #     motor.to_switch_on_disabled()
+    #     print(motor.state)
+    #     motor.set("switches", uint32(3))
+    #     motor.to_operational()
+    #     print(motor.state)
+    # motor1.start_rpdo(1)
+    # motor2.start_rpdo(2)
+    motor = Motor(node, rename_map=rename_map3)
+    motor.set_tpdos(tpdos[0])
     node.nmt.state = "OPERATIONAL"
     motor.operating_mode = 'pp'
-    motor.set(0x2005, uint32(3))
-    print(motor.state)
+    motor.to_switch_on_disabled()
+    motor.set("microstep_resolution", uint8(8))
+    motor.set('switches', uint32(3))
     motor.to_operational()
-    motor.set(0x607A, int32(int(50/0.0127*256)))
-    motor.set('controlword', uint16(31))
-    print(motor.state)
-    # motor.set_tpdos(tpdos)
-    # motor.set_rpdos(rpdos)
-    # network.sync.start(0.1)
-    # motor.start_rpdo(1)
+    motor.set("target_position", int32(int(0*200*128)))
+    motor.set("controlword", uint16(31))
+    network.sync.start(0.01)
 
     while True:
-        time.sleep(1)
+        #print(motor.get("position_actual_value")/(200*128))
+        time.sleep(0.01)
