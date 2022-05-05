@@ -90,6 +90,7 @@ class Motor:
                     var.raw = d
                 self.pdo.transmit()
                 time.sleep(1 / self.frequency)
+            self.running = False
 
         def start(self):
             self.thread = Thread(target=self.run)
@@ -119,6 +120,47 @@ class Motor:
         self._operating_mode = 0
         self._cw_index = controlword_index
         self._sw_index = statusword_index
+
+    def move_to_target(self, value, *, target_index='target_position', profile='pp'):
+        self.to_switch_on_disabled()
+        self.operating_mode = profile
+        self.to_operational()        
+
+        self.set(target_index, int32(value))
+        self.set(self._cw_index, uint16(31))
+        self.set(self._cw_index, uint16(15))
+
+    def follow_trajectory(self, rpdo_cfg, *, profile='csp'):
+        if not isinstance(rpdo_cfg, RPDOConfig):
+            raise TypeError("rpdo_cfg must be of type" + RPDOConfig.__class__)
+        self.to_switch_on_disabled()
+
+        self.set_rpdos((rpdo_cfg,))
+
+        self.operating_mode = profile
+        self.to_operational()   
+
+        self.start_rpdo(rpdo_cfg.index)
+
+
+    def go_home(self):
+        pass
+
+    def set_home_pos(self):
+        pass
+
+
+    def shutdown(self):
+        self.to_switch_on_disabled()
+
+        for tpdo_index in self.tpdo:
+            self.clear_tpdo(tpdo_index)
+
+        for index, task in self.rpdo_tasks.items():
+            task.stop()
+            self.clear_rpdo(index)
+        
+        self.rpdo_tasks.clear()
 
     def set_tpdos(self, configs: Iterable[TPDOConfig]):
 
@@ -280,24 +322,21 @@ class Motor:
 
 
 if __name__ == "__main__":
+
+    from signal import signal, SIGINT
+
+    signal(SIGINT, lambda h, f: (motor.shutdown(), exit(0)))
+
     network = canopen.Network()
     node = canopen.RemoteNode(0x75, "./examples/backripper/TMCM-6212.eds")
     network.add_node(node)
-    network.connect(bustype="pcan", channel="PCAN_USBBUS1", bitrate=1000000)
+    network.connect(bustype="socketcan", channel="can0", bitrate=1000000)
     time.sleep(0.1)
 
     node.nmt.state = "PRE-OPERATIONAL"
     node.tpdo.read()
     node.rpdo.read()
-
-    tpdos = [
-        [
-        TPDOConfig(1, ("position_actual_value",), rtr_allowed=False, enabled=True),
-        ],
-        [
-        TPDOConfig(2, ("position_actual_value",), rtr_allowed=False, enabled=True),
-        ]
-    ]
+    node.nmt.state = "OPERATIONAL"
 
     def generator_pos():
         start = time.time()
@@ -307,53 +346,17 @@ if __name__ == "__main__":
             value = value/0.0127*256
             yield(int(value),)
 
-    def generator_vel():
-        start = time.time()
-        while True:
-            actual_time = time.time() - start
-            value = 10*sin(2*pi*0.1*actual_time)
-            value = value*200*256
-            yield(int(value),)
+    traj_rpdo = RPDOConfig(1, ("target_position",), data=generator_pos, frequency=1000, rtr_allowed=False)
 
-    rpdos = [
-        [
-            RPDOConfig(1, ("target_position",), data=generator_pos, frequency=1000, rtr_allowed=False)
-        ],
-        [
-            RPDOConfig(2, ("target_position",), data=generator_vel, frequency=1000, rtr_allowed=False)
-        ]
-    ]
-
-    # motor1 = Motor(node)
-    # motor2 = Motor(node, rename_map=rename_map3)
-    # motors = [motor1, motor2]
-    # for index,motor in enumerate(motors):
-    #     motor.set_tpdos(tpdos[index])
-    #     motor.set_rpdos(rpdos[index])
-    # node.nmt.state = "OPERATIONAL"
-    # for motor in motors:
-    #     if motor.is_faulted:
-    #         motor.recover_from_fault()
-    #     motor.operating_mode = 'csp'
-    #     motor.to_switch_on_disabled()
-    #     print(motor.state)
-    #     motor.set("switches", uint32(3))
-    #     motor.to_operational()
-    #     print(motor.state)
-    # motor1.start_rpdo(1)
-    # motor2.start_rpdo(2)
-    motor = Motor(node, rename_map=rename_map3)
-    motor.set_tpdos(tpdos[0])
-    node.nmt.state = "OPERATIONAL"
-    motor.operating_mode = 'pp'
+   
+    motor = Motor(node, rename_map=rename_map)
     motor.to_switch_on_disabled()
     motor.set("microstep_resolution", uint8(8))
     motor.set('switches', uint32(3))
-    motor.to_operational()
-    motor.set("target_position", int32(int(0*200*128)))
-    motor.set("controlword", uint16(31))
-    network.sync.start(0.01)
+    
+
+    motor.follow_trajectory(traj_rpdo)
 
     while True:
-        #print(motor.get("position_actual_value")/(200*128))
+        print(motor.get("position_actual_value"))
         time.sleep(0.01)
