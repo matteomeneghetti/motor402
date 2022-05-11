@@ -31,7 +31,7 @@ class Motor:
 
         def run(self):
             self.running = True
-            for data in self.data_generator():
+            for data in self.data_generator:
                 if not self.running:
                     break
                 for (index, subindex), d in zip(self.indexes, data):
