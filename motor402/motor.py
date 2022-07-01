@@ -72,13 +72,16 @@ class Motor:
         self._cw_index = controlword_index
         self._sw_index = statusword_index
 
-    def move_to_target(self, value, *, target_index='target_position', profile='pp'):
+    def move_to_target(self, value, *, target_index='target_position', profile='pp', relative=False):
         self.to_switch_on_disabled()
         self.operating_mode = profile
         self.to_operational()
 
         self.set(target_index, int32(value))
-        self.set(self._cw_index, uint16(31))
+        move_command = 31
+        if relative:
+            move_command |= 64
+        self.set(self._cw_index, uint16(move_command))
         self.set(self._cw_index, uint16(15))
 
     def follow_trajectory(self, rpdo_cfg, *, profile='csp'):
