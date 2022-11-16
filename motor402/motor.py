@@ -97,17 +97,15 @@ class Motor:
         self.start_rpdo(rpdo_cfg.index)
 
 
-    def go_home(self):
-        self.move_to_target(0)
-
-    def set_home_pos(self):
+    def home(self, homing_method: int, homing_speed_fast: float, homing_speed_slow: float, homing_acc: float):
         self.to_switch_on_disabled()
         self.operating_mode = 'hm'
-        self.set('homing_method', int8(35))
         self.to_operational()
+        self.set('homing_method', int8(homing_method))
+        self.set('homing_speeds', uint32(homing_speed_fast), subindex=1) #256*8/0.0127
+        self.set('homing_speeds', uint32(homing_speed_slow), subindex=2)
+        self.set('homing_acceleration', uint32(homing_acc))
         self.set(self._cw_index, uint16(31))
-        self.set(self._cw_index, uint16(15))
-
 
     def shutdown(self):
         self.to_switch_on_disabled()
